@@ -12,6 +12,21 @@ resources:
 - controller: true
   domain: k8s.akira.sh
   group: reloader
-  kind: Reloader
+  kind: DeploymentReloader
+  version: "1"
+- controller: true
+  domain: k8s.akira.sh
+  group: reloader
+  kind: ReplicaSetReloader
+  version: "1"
+- controller: true
+  domain: k8s.akira.sh
+  group: reloader
+  kind: StatefulSetReloader
+  version: "1"
+- controller: true
+  domain: k8s.akira.sh
+  group: reloader
+  kind: DaemonSetReloader
   version: "1"
 version: "3"

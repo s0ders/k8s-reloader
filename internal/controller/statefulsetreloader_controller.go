@@ -19,32 +19,33 @@ package controller
 import (
 	"context"
 
+	appsv1 "k8s.io/api/apps/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	logf "sigs.k8s.io/controller-runtime/pkg/log"
 )
 
-// ReloaderReconciler reconciles a Reloader object
-type ReloaderReconciler struct {
+// StatefulSetReloaderReconciler reconciles a StatefulSetReloader object
+type StatefulSetReloaderReconciler struct {
 	client.Client
 	Scheme *runtime.Scheme
 }
 
-// +kubebuilder:rbac:groups=reloader.k8s.akira.sh,resources=reloaders,verbs=get;list;watch;create;update;patch;delete
-// +kubebuilder:rbac:groups=reloader.k8s.akira.sh,resources=reloaders/status,verbs=get;update;patch
-// +kubebuilder:rbac:groups=reloader.k8s.akira.sh,resources=reloaders/finalizers,verbs=update
+// +kubebuilder:rbac:groups=reloader.k8s.akira.sh,resources=statefulsetreloaders,verbs=get;list;watch;create;update;patch;delete
+// +kubebuilder:rbac:groups=reloader.k8s.akira.sh,resources=statefulsetreloaders/status,verbs=get;update;patch
+// +kubebuilder:rbac:groups=reloader.k8s.akira.sh,resources=statefulsetreloaders/finalizers,verbs=update
 
 // Reconcile is part of the main kubernetes reconciliation loop which aims to
 // move the current state of the cluster closer to the desired state.
 // TODO(user): Modify the Reconcile function to compare the state specified by
-// the Reloader object against the actual cluster state, and then
+// the StatefulSetReloader object against the actual cluster state, and then
 // perform operations to make the cluster state reflect the state specified by
 // the user.
 //
 // For more details, check Reconcile and its Result here:
 // - https://pkg.go.dev/sigs.k8s.io/controller-runtime@v0.23.3/pkg/reconcile
-func (r *ReloaderReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
+func (r *StatefulSetReloaderReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
 	_ = logf.FromContext(ctx)
 
 	// TODO(user): your logic here
@@ -53,10 +54,9 @@ func (r *ReloaderReconciler) Reconcile(ctx context.Context, req ctrl.Request) (c
 }
 
 // SetupWithManager sets up the controller with the Manager.
-func (r *ReloaderReconciler) SetupWithManager(mgr ctrl.Manager) error {
+func (r *StatefulSetReloaderReconciler) SetupWithManager(mgr ctrl.Manager) error {
 	return ctrl.NewControllerManagedBy(mgr).
-		// Uncomment the following line adding a pointer to an instance of the controlled resource as an argument
-		// For().
-		Named("reloader").
+		For(&appsv1.StatefulSet{}).
+		Named("statefulsetreloader").
 		Complete(r)
 }

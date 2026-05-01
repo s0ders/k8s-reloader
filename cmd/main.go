@@ -176,11 +176,32 @@ func main() {
 		os.Exit(1)
 	}
 
-	if err := (&controller.ReloaderReconciler{
+	if err := (&controller.DeploymentReloaderReconciler{
 		Client: mgr.GetClient(),
 		Scheme: mgr.GetScheme(),
 	}).SetupWithManager(mgr); err != nil {
-		setupLog.Error(err, "Failed to create controller", "controller", "Reloader")
+		setupLog.Error(err, "Failed to create controller", "controller", "DeploymentReloader")
+		os.Exit(1)
+	}
+	if err := (&controller.ReplicaSetReloaderReconciler{
+		Client: mgr.GetClient(),
+		Scheme: mgr.GetScheme(),
+	}).SetupWithManager(mgr); err != nil {
+		setupLog.Error(err, "Failed to create controller", "controller", "ReplicaSetReloader")
+		os.Exit(1)
+	}
+	if err := (&controller.StatefulSetReloaderReconciler{
+		Client: mgr.GetClient(),
+		Scheme: mgr.GetScheme(),
+	}).SetupWithManager(mgr); err != nil {
+		setupLog.Error(err, "Failed to create controller", "controller", "StatefulSetReloader")
+		os.Exit(1)
+	}
+	if err := (&controller.DaemonSetReloaderReconciler{
+		Client: mgr.GetClient(),
+		Scheme: mgr.GetScheme(),
+	}).SetupWithManager(mgr); err != nil {
+		setupLog.Error(err, "Failed to create controller", "controller", "DaemonSetReloader")
 		os.Exit(1)
 	}
 	// +kubebuilder:scaffold:builder

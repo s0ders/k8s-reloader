@@ -1,11 +1,56 @@
+---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRole
 metadata:
-  labels:
-    app.kubernetes.io/name: k8s-reloader
-    app.kubernetes.io/managed-by: kustomize
   name: manager-role
 rules:
-- apiGroups: [""]
-  resources: ["pods"]
-  verbs: ["get", "list", "watch"]
+- apiGroups:
+  - ""
+  resources:
+  - configmaps
+  verbs:
+  - get
+  - list
+  - watch
+- apiGroups:
+  - apps
+  resources:
+  - deployments
+  verbs:
+  - get
+  - list
+  - patch
+  - update
+  - watch
+- apiGroups:
+  - reloader.k8s.akira.sh
+  resources:
+  - daemonsetreloaders
+  - replicasetreloaders
+  - statefulsetreloaders
+  verbs:
+  - create
+  - delete
+  - get
+  - list
+  - patch
+  - update
+  - watch
+- apiGroups:
+  - reloader.k8s.akira.sh
+  resources:
+  - daemonsetreloaders/finalizers
+  - replicasetreloaders/finalizers
+  - statefulsetreloaders/finalizers
+  verbs:
+  - update
+- apiGroups:
+  - reloader.k8s.akira.sh
+  resources:
+  - daemonsetreloaders/status
+  - replicasetreloaders/status
+  - statefulsetreloaders/status
+  verbs:
+  - get
+  - patch
+  - update

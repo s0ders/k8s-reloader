@@ -1,8 +1,10 @@
 # k8s-reloader
-// TODO(user): Add simple overview of use/purpose
+
+Rollout deployments, replicasets, statefulsets and daemonsets when the secrets or configmaps they use change using
+annotations.
 
 ## Description
-// TODO(user): An in-depth paragraph about your project and overview of use
+// TODO
 
 ## Getting Started
 
