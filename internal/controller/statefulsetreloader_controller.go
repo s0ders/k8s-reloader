@@ -20,10 +20,16 @@ import (
 	"context"
 
 	appsv1 "k8s.io/api/apps/v1"
+	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/apimachinery/pkg/types"
 	ctrl "sigs.k8s.io/controller-runtime"
+	"sigs.k8s.io/controller-runtime/pkg/builder"
 	"sigs.k8s.io/controller-runtime/pkg/client"
+	"sigs.k8s.io/controller-runtime/pkg/handler"
 	logf "sigs.k8s.io/controller-runtime/pkg/log"
+	"sigs.k8s.io/controller-runtime/pkg/predicate"
+	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 )
 
 // StatefulSetReloaderReconciler reconciles a StatefulSetReloader object
@@ -32,16 +38,12 @@ type StatefulSetReloaderReconciler struct {
 	Scheme *runtime.Scheme
 }
 
-// +kubebuilder:rbac:groups=reloader.k8s.akira.sh,resources=statefulsetreloaders,verbs=get;list;watch;create;update;patch;delete
-// +kubebuilder:rbac:groups=reloader.k8s.akira.sh,resources=statefulsetreloaders/status,verbs=get;update;patch
-// +kubebuilder:rbac:groups=reloader.k8s.akira.sh,resources=statefulsetreloaders/finalizers,verbs=update
+// +kubebuilder:rbac:groups=apps,resources=statefulsets,verbs=get;list;watch;update;patch
+// +kubebuilder:rbac:groups="",resources=configmaps,verbs=get;list;watch
+// +kubebuilder:rbac:groups="",resources=secrets,verbs=get;list;watch
 
 // Reconcile is part of the main kubernetes reconciliation loop which aims to
 // move the current state of the cluster closer to the desired state.
-// TODO(user): Modify the Reconcile function to compare the state specified by
-// the StatefulSetReloader object against the actual cluster state, and then
-// perform operations to make the cluster state reflect the state specified by
-// the user.
 //
 // For more details, check Reconcile and its Result here:
 // - https://pkg.go.dev/sigs.k8s.io/controller-runtime@v0.23.3/pkg/reconcile
@@ -57,6 +59,124 @@ func (r *StatefulSetReloaderReconciler) Reconcile(ctx context.Context, req ctrl.
 func (r *StatefulSetReloaderReconciler) SetupWithManager(mgr ctrl.Manager) error {
 	return ctrl.NewControllerManagedBy(mgr).
 		For(&appsv1.StatefulSet{}).
-		Named("statefulsetreloader").
+		Watches(
+			&corev1.ConfigMap{},
+			handler.EnqueueRequestsFromMapFunc(r.findStatefulSetsForConfigMap),
+			builder.WithPredicates(predicate.ResourceVersionChangedPredicate{}),
+		).
+		Watches(
+			&corev1.Secret{},
+			handler.EnqueueRequestsFromMapFunc(r.findStatefulSetsForSecret),
+			builder.WithPredicates(predicate.ResourceVersionChangedPredicate{}),
+		).
+		Named("statefulSetReloader").
 		Complete(r)
+}
+
+func (r *StatefulSetReloaderReconciler) findStatefulSetsForConfigMap(ctx context.Context, obj client.Object) []reconcile.Request {
+	var cm corev1.ConfigMap
+	if err := r.Get(ctx, client.ObjectKeyFromObject(obj), &cm); err != nil {
+		return nil
+	}
+
+	var statefulSetList appsv1.StatefulSetList
+	if err := r.List(ctx, &statefulSetList, client.InNamespace(obj.GetNamespace())); err != nil {
+		return nil
+	}
+
+	var result []reconcile.Request
+
+	for _, statefulSet := range statefulSetList.Items {
+		if statefulSetReferencesConfigMap(statefulSet, cm.GetName()) {
+			result = append(result, reconcile.Request{
+				NamespacedName: types.NamespacedName{
+					Name:      statefulSet.Name,
+					Namespace: statefulSet.Namespace,
+				},
+			})
+		}
+	}
+
+	return result
+}
+
+func statefulSetReferencesConfigMap(statefulSet appsv1.StatefulSet, configMapName string) bool {
+	// Check volumes
+	for _, vol := range statefulSet.Spec.Template.Spec.Volumes {
+		if vol.ConfigMap != nil && vol.ConfigMap.Name == configMapName {
+			return true
+		}
+	}
+	// Check envFrom on each container
+	for _, container := range statefulSet.Spec.Template.Spec.Containers {
+		for _, envFrom := range container.EnvFrom {
+			if envFrom.ConfigMapRef != nil && envFrom.ConfigMapRef.Name == configMapName {
+				return true
+			}
+		}
+		// Check individual env vars sourced from configmap
+		for _, env := range container.Env {
+			if env.ValueFrom != nil &&
+				env.ValueFrom.ConfigMapKeyRef != nil &&
+				env.ValueFrom.ConfigMapKeyRef.Name == configMapName {
+				return true
+			}
+		}
+	}
+
+	return false
+}
+
+func (r *StatefulSetReloaderReconciler) findStatefulSetsForSecret(ctx context.Context, obj client.Object) []reconcile.Request {
+	var secret corev1.Secret
+	if err := r.Get(ctx, client.ObjectKeyFromObject(obj), &secret); err != nil {
+		return nil
+	}
+
+	var statefulSetList appsv1.StatefulSetList
+	if err := r.List(ctx, &statefulSetList, client.InNamespace(obj.GetNamespace())); err != nil {
+		return nil
+	}
+
+	var result []reconcile.Request
+
+	for _, statefulSet := range statefulSetList.Items {
+		if statefulSetReferencesSecret(statefulSet, secret.GetName()) {
+			result = append(result, reconcile.Request{
+				NamespacedName: types.NamespacedName{
+					Name:      statefulSet.Name,
+					Namespace: statefulSet.Namespace,
+				},
+			})
+		}
+	}
+
+	return result
+}
+
+func statefulSetReferencesSecret(statefulSet appsv1.StatefulSet, secretName string) bool {
+	// Check volumes
+	for _, vol := range statefulSet.Spec.Template.Spec.Volumes {
+		if vol.Secret != nil && vol.Secret.SecretName == secretName {
+			return true
+		}
+	}
+	// Check envFrom on each container
+	for _, container := range statefulSet.Spec.Template.Spec.Containers {
+		for _, envFrom := range container.EnvFrom {
+			if envFrom.SecretRef != nil && envFrom.SecretRef.Name == secretName {
+				return true
+			}
+		}
+		// Check individual env vars sourced from configmap
+		for _, env := range container.Env {
+			if env.ValueFrom != nil &&
+				env.ValueFrom.SecretKeyRef != nil &&
+				env.ValueFrom.SecretKeyRef.Name == secretName {
+				return true
+			}
+		}
+	}
+
+	return false
 }

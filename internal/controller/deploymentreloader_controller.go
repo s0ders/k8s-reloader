@@ -24,13 +24,13 @@ import (
 
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
-	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/types"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/builder"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/handler"
+	logf "sigs.k8s.io/controller-runtime/pkg/log"
 	"sigs.k8s.io/controller-runtime/pkg/predicate"
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 )
@@ -43,36 +43,24 @@ type DeploymentReloaderReconciler struct {
 
 // +kubebuilder:rbac:groups=apps,resources=deployments,verbs=get;list;watch;update;patch
 // +kubebuilder:rbac:groups="",resources=configmaps,verbs=get;list;watch
+// +kubebuilder:rbac:groups="",resources=secrets,verbs=get;list;watch
 
 // Reconcile is part of the main kubernetes reconciliation loop which aims to
 // move the current state of the cluster closer to the desired state.
 //
-// For more details, check Reconcile and its Result here:
-// - https://pkg.go.dev/sigs.k8s.io/controller-runtime@v0.23.3/pkg/reconcile
+// The filtering of deployments that should be reconciled is happens in the handler (checking if reloading is enabled,
+// etc.), the reconcile assumes the deployment should be reloaded if it arrived this far in the process.
 func (r *DeploymentReloaderReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
 	var deployment appsv1.Deployment
 	if err := r.Get(ctx, req.NamespacedName, &deployment); err != nil {
 		return ctrl.Result{}, client.IgnoreNotFound(err)
 	}
 
-	if !metav1.HasAnnotation(deployment.ObjectMeta, reloaderEnabledAnnotation) {
-		return ctrl.Result{}, nil
-	}
-
-	reloaderEnabled, err := strconv.ParseBool(deployment.Annotations[reloaderEnabledAnnotation])
-	if err != nil {
-		return ctrl.Result{}, fmt.Errorf("failed to parse reloaderEnabled annotation: %w", err)
-	}
-
-	if !reloaderEnabled {
-		return ctrl.Result{}, nil
-	}
-
 	unixTimestamp := time.Now().Unix()
 
-	deployment.Annotations[reloaderTimestampAnnotation] = strconv.Itoa(int(unixTimestamp))
+	deployment.Spec.Template.Annotations[reloaderTimestampAnnotation] = strconv.Itoa(int(unixTimestamp))
 
-	if err = r.Update(ctx, &deployment); err != nil {
+	if err := r.Update(ctx, &deployment); err != nil {
 		return ctrl.Result{}, fmt.Errorf("failed to update deployment: %w", err)
 	}
 
@@ -93,26 +81,33 @@ func (r *DeploymentReloaderReconciler) SetupWithManager(mgr ctrl.Manager) error 
 			handler.EnqueueRequestsFromMapFunc(r.findDeploymentsForSecret),
 			builder.WithPredicates(predicate.ResourceVersionChangedPredicate{}),
 		).
-		Named("deploymentreloader").
+		Named("deploymentReloader").
 		Complete(r)
 }
 
 func (r *DeploymentReloaderReconciler) findDeploymentsForConfigMap(ctx context.Context, obj client.Object) []reconcile.Request {
+	log := logf.FromContext(ctx)
+
 	var cm corev1.ConfigMap
 	if err := r.Get(ctx, client.ObjectKeyFromObject(obj), &cm); err != nil {
 		return nil
 	}
 
-	if metav1.HasAnnotation(cm.ObjectMeta, reloaderIgnoreAnnotation) {
-		ignore, err := strconv.ParseBool(cm.Annotations[reloaderIgnoreAnnotation])
-		if err != nil {
-			// TODO: log something to let user know something is wrong
-			return nil
-		}
+	// Check if ConfigMap should be ignored first
+	ignore, err := ignoreReloading(cm.ObjectMeta)
+	if err != nil {
+		log.Error(
+			err,
+			"failed to parse the annotation on configmap, should be a boolean",
+			"configmap", obj.GetName(),
+			"namespace", obj.GetNamespace(),
+			"annotation", cm.Annotations[reloaderIgnoreAnnotation],
+		)
+		return nil
+	}
 
-		if ignore {
-			return nil
-		}
+	if ignore {
+		return nil
 	}
 
 	var deployments appsv1.DeploymentList
@@ -120,9 +115,39 @@ func (r *DeploymentReloaderReconciler) findDeploymentsForConfigMap(ctx context.C
 		return []reconcile.Request{}
 	}
 
+	// Filter deployment to see if they reference the ConfigMap and if they wish to reload on changes
 	var requests []reconcile.Request
+
 	for _, deployment := range deployments.Items {
-		if referencesConfigMap(deployment, obj.GetName()) {
+		shouldReload, err := reloadingEnabled(deployment.ObjectMeta)
+		if err != nil {
+			log.Error(
+				err,
+				"failed to parse the annotation on deployment, should be a boolean",
+				"deployment", deployment.GetName(),
+				"namespace", deployment.GetNamespace(),
+				"annotation", deployment.Annotations[reloaderEnabledAnnotation],
+			)
+			continue
+		}
+
+		shouldReloadOnConfigMap, err := configMapReloadingEnabled(deployment.ObjectMeta)
+		if err != nil {
+			log.Error(
+				err,
+				"failed to parse the annotations on deployment, should be a boolean",
+				"deployment", deployment.GetName(),
+				"namespace", deployment.GetNamespace(),
+				"annotation", deployment.Annotations[reloaderConfigMapEnabledAnnotation],
+			)
+			continue
+		}
+
+		if !shouldReload && !shouldReloadOnConfigMap {
+			continue
+		}
+
+		if deploymentReferencesConfigMap(deployment, obj.GetName()) {
 			requests = append(requests, reconcile.Request{
 				NamespacedName: types.NamespacedName{
 					Namespace: deployment.Namespace,
@@ -131,10 +156,11 @@ func (r *DeploymentReloaderReconciler) findDeploymentsForConfigMap(ctx context.C
 			})
 		}
 	}
+
 	return requests
 }
 
-func referencesConfigMap(deployment appsv1.Deployment, configMapName string) bool {
+func deploymentReferencesConfigMap(deployment appsv1.Deployment, configMapName string) bool {
 	// Check volumes
 	for _, vol := range deployment.Spec.Template.Spec.Volumes {
 		if vol.ConfigMap != nil && vol.ConfigMap.Name == configMapName {
@@ -161,21 +187,28 @@ func referencesConfigMap(deployment appsv1.Deployment, configMapName string) boo
 }
 
 func (r *DeploymentReloaderReconciler) findDeploymentsForSecret(ctx context.Context, obj client.Object) []reconcile.Request {
+	log := logf.FromContext(ctx)
+
 	var secret corev1.Secret
 	if err := r.Get(ctx, client.ObjectKeyFromObject(obj), &secret); err != nil {
 		return nil
 	}
 
-	if metav1.HasAnnotation(secret.ObjectMeta, reloaderIgnoreAnnotation) {
-		ignore, err := strconv.ParseBool(secret.Annotations[reloaderIgnoreAnnotation])
-		if err != nil {
-			// TODO: log something to let user know something is wrong
-			return nil
-		}
+	// Check if ConfigMap should be ignored first
+	ignore, err := ignoreReloading(secret.ObjectMeta)
+	if err != nil {
+		log.Error(
+			err,
+			"failed to parse the annotation on secret, should be a boolean",
+			"configmap", obj.GetName(),
+			"namespace", obj.GetNamespace(),
+			"annotation", secret.Annotations[reloaderIgnoreAnnotation],
+		)
+		return nil
+	}
 
-		if ignore {
-			return nil
-		}
+	if ignore {
+		return nil
 	}
 
 	var deployments appsv1.DeploymentList
@@ -184,8 +217,37 @@ func (r *DeploymentReloaderReconciler) findDeploymentsForSecret(ctx context.Cont
 	}
 
 	var requests []reconcile.Request
+
 	for _, deployment := range deployments.Items {
-		if referencesSecret(deployment, obj.GetName()) {
+		shouldReload, err := reloadingEnabled(deployment.ObjectMeta)
+		if err != nil {
+			log.Error(
+				err,
+				"failed to parse the annotation on deployment, should be a boolean",
+				"deployment", deployment.GetName(),
+				"namespace", deployment.GetNamespace(),
+				"annotation", deployment.Annotations[reloaderEnabledAnnotation],
+			)
+			continue
+		}
+
+		shouldReloadOnConfigMap, err := secretReloadingEnabled(deployment.ObjectMeta)
+		if err != nil {
+			log.Error(
+				err,
+				"failed to parse the annotations on deployment, should be a boolean",
+				"deployment", deployment.GetName(),
+				"namespace", deployment.GetNamespace(),
+				"annotation", deployment.Annotations[reloaderSecretEnabledAnnotation],
+			)
+			continue
+		}
+
+		if !shouldReload && !shouldReloadOnConfigMap {
+			continue
+		}
+
+		if deploymentReferencesSecret(deployment, obj.GetName()) {
 			requests = append(requests, reconcile.Request{
 				NamespacedName: types.NamespacedName{
 					Namespace: deployment.Namespace,
@@ -197,7 +259,8 @@ func (r *DeploymentReloaderReconciler) findDeploymentsForSecret(ctx context.Cont
 	return requests
 }
 
-func referencesSecret(deployment appsv1.Deployment, secretName string) bool {
+func deploymentReferencesSecret(deployment appsv1.Deployment, secretName string) bool {
+
 	// Check volumes
 	for _, vol := range deployment.Spec.Template.Spec.Volumes {
 		if vol.Secret != nil && vol.Secret.SecretName == secretName {

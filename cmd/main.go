@@ -183,6 +183,7 @@ func main() {
 		setupLog.Error(err, "Failed to create controller", "controller", "DeploymentReloader")
 		os.Exit(1)
 	}
+
 	if err := (&controller.ReplicaSetReloaderReconciler{
 		Client: mgr.GetClient(),
 		Scheme: mgr.GetScheme(),
@@ -190,6 +191,7 @@ func main() {
 		setupLog.Error(err, "Failed to create controller", "controller", "ReplicaSetReloader")
 		os.Exit(1)
 	}
+
 	if err := (&controller.StatefulSetReloaderReconciler{
 		Client: mgr.GetClient(),
 		Scheme: mgr.GetScheme(),
@@ -197,6 +199,7 @@ func main() {
 		setupLog.Error(err, "Failed to create controller", "controller", "StatefulSetReloader")
 		os.Exit(1)
 	}
+
 	if err := (&controller.DaemonSetReloaderReconciler{
 		Client: mgr.GetClient(),
 		Scheme: mgr.GetScheme(),
