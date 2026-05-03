@@ -3,7 +3,6 @@ package controller
 import (
 	"context"
 	"fmt"
-	"strconv"
 	"time"
 
 	"github.com/s0ders/k8s-reloader/internal/controller/annotation"
@@ -160,8 +159,10 @@ func GenericReconcile[T client.Object](
 	getPodTemplateAnnotations func(obj T) map[string]string,
 	setPodTemplateAnnotations func(obj T, annotations map[string]string),
 ) (ctrl.Result, error) {
-
 	obj, err := getObject(req)
+	if err != nil {
+		return ctrl.Result{}, err
+	}
 
 	configMaps, err := helpers.ReferencedConfigMaps(ctx, obj, c)
 	if err != nil {
@@ -189,24 +190,22 @@ func GenericReconcile[T client.Object](
 
 	for configMapName, configMapHash := range configMapHashes {
 		hashAnnotation := annotation.ConfigMapHashAnnotation(configMapName)
+		currentHash, found := annotations[hashAnnotation]
 
-		if _, found := annotations[hashAnnotation]; !found {
+		if !found || currentHash != configMapHash {
 			annotations[hashAnnotation] = configMapHash
 			obj.SetAnnotations(annotations)
-		} else if annotations[hashAnnotation] != configMapHash {
-			annotations[hashAnnotation] = configMapHash
 			triggerRollout = true
 		}
 	}
 
 	for secretName, secretHash := range secretHashes {
 		hashAnnotation := annotation.SecretHashAnnotation(secretName)
+		currentHash, found := annotations[hashAnnotation]
 
-		if _, found := annotations[hashAnnotation]; !found {
+		if !found || currentHash != secretHash {
 			annotations[hashAnnotation] = secretHash
 			obj.SetAnnotations(annotations)
-		} else if annotations[hashAnnotation] != secretHash {
-			annotations[hashAnnotation] = secretHash
 			triggerRollout = true
 		}
 	}
@@ -217,7 +216,7 @@ func GenericReconcile[T client.Object](
 			podAnnotations = make(map[string]string)
 		}
 
-		podAnnotations[annotation.ReloaderTimestampAnnotation] = strconv.Itoa(int(time.Now().Unix()))
+		podAnnotations[annotation.ReloaderTimestampAnnotation] = time.Now().UTC().Format(time.RFC3339)
 		setPodTemplateAnnotations(obj, podAnnotations)
 	}
 

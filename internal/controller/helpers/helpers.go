@@ -8,11 +8,12 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/s0ders/k8s-reloader/internal/controller/annotation"
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/types"
 	"sigs.k8s.io/controller-runtime/pkg/client"
+
+	"github.com/s0ders/k8s-reloader/internal/controller/annotation"
 )
 
 func getPodTemplate(obj client.Object) (*corev1.PodTemplateSpec, error) {
@@ -228,8 +229,7 @@ func ShouldReloadOnConfigMapChange(obj client.Object, configMapName string) (boo
 	}
 
 	// Check if the ConfigMaps the object wants to reload on contain the one that changed.
-	configMapNames := strings.Split(annotations[annotation.ReloaderConfigMapEnabledAnnotation], ",")
-	for _, name := range configMapNames {
+	for name := range strings.SplitSeq(annotations[annotation.ReloaderConfigMapEnabledAnnotation], ",") {
 		if name == configMapName {
 			return true, nil
 		}
@@ -258,8 +258,7 @@ func ShouldReloadOnSecretChange(obj client.Object, secretName string) (bool, err
 	}
 
 	// Check if the Secrets the object wants to reload on contain the one that changed.
-	secretNames := strings.Split(annotations[annotation.ReloaderSecretEnabledAnnotation], ",")
-	for _, name := range secretNames {
+	for name := range strings.SplitSeq(annotations[annotation.ReloaderSecretEnabledAnnotation], ",") {
 		if name == secretName {
 			return true, nil
 		}
