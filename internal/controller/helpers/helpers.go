@@ -1,4 +1,4 @@
-package controller
+package helpers
 
 import (
 	"context"
@@ -8,9 +8,9 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/s0ders/k8s-reloader/internal/controller/annotation"
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
-	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 )
@@ -30,7 +30,7 @@ func getPodTemplate(obj client.Object) (*corev1.PodTemplateSpec, error) {
 	}
 }
 
-func referencesConfigMap(obj client.Object, configMapName string) bool {
+func ReferencesConfigMap(obj client.Object, configMapName string) bool {
 	template, err := getPodTemplate(obj)
 	if err != nil {
 		return false
@@ -61,7 +61,7 @@ func referencesConfigMap(obj client.Object, configMapName string) bool {
 	return false
 }
 
-func referencedConfigMaps(ctx context.Context, obj client.Object, k8sClient client.Client) ([]corev1.ConfigMap, error) {
+func ReferencedConfigMaps(ctx context.Context, obj client.Object, k8sClient client.Client) ([]corev1.ConfigMap, error) {
 	template, err := getPodTemplate(obj)
 	if err != nil {
 		return nil, fmt.Errorf("error getting pod template: %v", err)
@@ -112,7 +112,7 @@ func referencedConfigMaps(ctx context.Context, obj client.Object, k8sClient clie
 	return configMaps, nil
 }
 
-func referencedSecrets(ctx context.Context, obj client.Object, k8sClient client.Client) ([]corev1.Secret, error) {
+func ReferencedSecrets(ctx context.Context, obj client.Object, c client.Client) ([]corev1.Secret, error) {
 	template, err := getPodTemplate(obj)
 	if err != nil {
 		return nil, fmt.Errorf("error getting pod template: %v", err)
@@ -152,7 +152,7 @@ func referencedSecrets(ctx context.Context, obj client.Object, k8sClient client.
 	for secretName := range secretNames {
 		var secret corev1.Secret
 
-		err = k8sClient.Get(ctx, types.NamespacedName{Name: secretName, Namespace: obj.GetNamespace()}, &secret)
+		err = c.Get(ctx, types.NamespacedName{Name: secretName, Namespace: obj.GetNamespace()}, &secret)
 		if err != nil {
 			continue
 		}
@@ -163,7 +163,7 @@ func referencedSecrets(ctx context.Context, obj client.Object, k8sClient client.
 	return secrets, nil
 }
 
-func referencesSecret(obj client.Object, secretName string) bool {
+func ReferencesSecret(obj client.Object, secretName string) bool {
 	template, err := getPodTemplate(obj)
 	if err != nil {
 		return false
@@ -194,21 +194,23 @@ func referencesSecret(obj client.Object, secretName string) bool {
 	return false
 }
 
-func reloadingEnabled(metadata metav1.ObjectMeta) (bool, error) {
-	if !metav1.HasAnnotation(metadata, reloaderEnabledAnnotation) {
+func ReloadingEnabled(obj client.Object) (bool, error) {
+	annotations := obj.GetAnnotations()
+
+	if _, found := annotations[annotation.ReloaderEnabledAnnotation]; !found {
 		return false, nil
 	}
 
-	b, err := strconv.ParseBool(metadata.Annotations[reloaderEnabledAnnotation])
+	b, err := strconv.ParseBool(annotations[annotation.ReloaderEnabledAnnotation])
 	if err != nil {
-		return false, fmt.Errorf("failed to parse reloader enabled annotation %q: %w", reloaderEnabledAnnotation, err)
+		return false, fmt.Errorf("failed to parse reloader enabled annotation %q: %w", annotation.ReloaderEnabledAnnotation, err)
 	}
 
 	return b, nil
 }
 
-func shouldReloadOnConfigMapChange(metadata metav1.ObjectMeta, configMapName string) (bool, error) {
-	genericReloading, err := reloadingEnabled(metadata)
+func ShouldReloadOnConfigMapChange(obj client.Object, configMapName string) (bool, error) {
+	genericReloading, err := ReloadingEnabled(obj)
 	if err != nil {
 		return false, err
 	}
@@ -218,13 +220,15 @@ func shouldReloadOnConfigMapChange(metadata metav1.ObjectMeta, configMapName str
 		return true, nil
 	}
 
+	annotations := obj.GetAnnotations()
+
 	// Object does not have global reloading enabled nor ConfigMap specific reloading.
-	if !metav1.HasAnnotation(metadata, reloaderConfigMapEnabledAnnotation) {
+	if _, found := annotations[annotation.ReloaderConfigMapEnabledAnnotation]; !found {
 		return false, nil
 	}
 
 	// Check if the ConfigMaps the object wants to reload on contain the one that changed.
-	configMapNames := strings.Split(metadata.Annotations[reloaderConfigMapEnabledAnnotation], ",")
+	configMapNames := strings.Split(annotations[annotation.ReloaderConfigMapEnabledAnnotation], ",")
 	for _, name := range configMapNames {
 		if name == configMapName {
 			return true, nil
@@ -235,8 +239,8 @@ func shouldReloadOnConfigMapChange(metadata metav1.ObjectMeta, configMapName str
 	return false, nil
 }
 
-func shouldReloadOnSecretChange(metadata metav1.ObjectMeta, secretName string) (bool, error) {
-	genericReloading, err := reloadingEnabled(metadata)
+func ShouldReloadOnSecretChange(obj client.Object, secretName string) (bool, error) {
+	genericReloading, err := ReloadingEnabled(obj)
 	if err != nil {
 		return false, err
 	}
@@ -246,13 +250,15 @@ func shouldReloadOnSecretChange(metadata metav1.ObjectMeta, secretName string) (
 		return true, nil
 	}
 
+	annotations := obj.GetAnnotations()
+
 	// Object does not have global reloading enabled nor Secret specific reloading.
-	if !metav1.HasAnnotation(metadata, reloaderSecretEnabledAnnotation) {
+	if _, found := annotations[annotation.ReloaderSecretEnabledAnnotation]; !found {
 		return false, nil
 	}
 
 	// Check if the Secrets the object wants to reload on contain the one that changed.
-	secretNames := strings.Split(metadata.Annotations[reloaderSecretEnabledAnnotation], ",")
+	secretNames := strings.Split(annotations[annotation.ReloaderSecretEnabledAnnotation], ",")
 	for _, name := range secretNames {
 		if name == secretName {
 			return true, nil
@@ -263,12 +269,14 @@ func shouldReloadOnSecretChange(metadata metav1.ObjectMeta, secretName string) (
 	return false, nil
 }
 
-func ignoreReloading(metadata metav1.ObjectMeta) (bool, error) {
-	if !metav1.HasAnnotation(metadata, reloaderIgnoreAnnotation) {
+func IgnoreReloading(obj client.Object) (bool, error) {
+	annotations := obj.GetAnnotations()
+
+	if _, found := annotations[annotation.ReloaderIgnoreAnnotation]; !found {
 		return false, nil
 	}
 
-	b, err := strconv.ParseBool(metadata.Annotations[reloaderIgnoreAnnotation])
+	b, err := strconv.ParseBool(annotations[annotation.ReloaderIgnoreAnnotation])
 	if err != nil {
 		return false, fmt.Errorf("failed to parse reloader ignore annotation: %w", err)
 	}
@@ -276,7 +284,7 @@ func ignoreReloading(metadata metav1.ObjectMeta) (bool, error) {
 	return b, nil
 }
 
-func hashConfigMapData(data map[string]string) string {
+func HashConfigMapData(data map[string]string) string {
 	keys := make([]string, 0, len(data))
 
 	for k := range data {
@@ -294,7 +302,7 @@ func hashConfigMapData(data map[string]string) string {
 	return fmt.Sprintf("%x", hash.Sum64())
 }
 
-func hashSecretData(data map[string][]byte) string {
+func HashSecretData(data map[string][]byte) string {
 	keys := make([]string, 0, len(data))
 
 	for k := range data {

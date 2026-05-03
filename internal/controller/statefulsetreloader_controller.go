@@ -22,12 +22,10 @@ import (
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/runtime"
-	"k8s.io/apimachinery/pkg/types"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/builder"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/handler"
-	logf "sigs.k8s.io/controller-runtime/pkg/log"
 	"sigs.k8s.io/controller-runtime/pkg/predicate"
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 )
@@ -48,11 +46,24 @@ type StatefulSetReloaderReconciler struct {
 // For more details, check Reconcile and its Result here:
 // - https://pkg.go.dev/sigs.k8s.io/controller-runtime@v0.23.3/pkg/reconcile
 func (r *StatefulSetReloaderReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
-	_ = logf.FromContext(ctx)
-
-	// TODO(user): your logic here
-
-	return ctrl.Result{}, nil
+	return GenericReconcile(
+		ctx,
+		req,
+		r.Client,
+		func(req ctrl.Request) (*appsv1.StatefulSet, error) {
+			var statefulSet appsv1.StatefulSet
+			if err := r.Get(ctx, req.NamespacedName, &statefulSet); err != nil {
+				return nil, err
+			}
+			return &statefulSet, nil
+		},
+		func(obj *appsv1.StatefulSet) map[string]string {
+			return obj.Spec.Template.Annotations
+		},
+		func(obj *appsv1.StatefulSet, annotations map[string]string) {
+			obj.Spec.Template.Annotations = annotations
+		},
+	)
 }
 
 // SetupWithManager sets up the controller with the Manager.
@@ -74,109 +85,31 @@ func (r *StatefulSetReloaderReconciler) SetupWithManager(mgr ctrl.Manager) error
 }
 
 func (r *StatefulSetReloaderReconciler) findStatefulSetsForConfigMap(ctx context.Context, obj client.Object) []reconcile.Request {
-	var cm corev1.ConfigMap
-	if err := r.Get(ctx, client.ObjectKeyFromObject(obj), &cm); err != nil {
-		return nil
-	}
+	return FindWorkloadsForConfigMap(ctx, r.Client, obj, func(ctx context.Context, namespace string) ([]*appsv1.StatefulSet, error) {
+		var list appsv1.StatefulSetList
+		err := r.List(ctx, &list, client.InNamespace(namespace))
 
-	var statefulSetList appsv1.StatefulSetList
-	if err := r.List(ctx, &statefulSetList, client.InNamespace(obj.GetNamespace())); err != nil {
-		return nil
-	}
+		pointerList := make([]*appsv1.StatefulSet, len(list.Items))
 
-	var result []reconcile.Request
-
-	for _, statefulSet := range statefulSetList.Items {
-		if statefulSetReferencesConfigMap(statefulSet, cm.GetName()) {
-			result = append(result, reconcile.Request{
-				NamespacedName: types.NamespacedName{
-					Name:      statefulSet.Name,
-					Namespace: statefulSet.Namespace,
-				},
-			})
+		for i, item := range list.Items {
+			pointerList[i] = &item
 		}
-	}
 
-	return result
-}
-
-func statefulSetReferencesConfigMap(statefulSet appsv1.StatefulSet, configMapName string) bool {
-	// Check volumes
-	for _, vol := range statefulSet.Spec.Template.Spec.Volumes {
-		if vol.ConfigMap != nil && vol.ConfigMap.Name == configMapName {
-			return true
-		}
-	}
-	// Check envFrom on each container
-	for _, container := range statefulSet.Spec.Template.Spec.Containers {
-		for _, envFrom := range container.EnvFrom {
-			if envFrom.ConfigMapRef != nil && envFrom.ConfigMapRef.Name == configMapName {
-				return true
-			}
-		}
-		// Check individual env vars sourced from configmap
-		for _, env := range container.Env {
-			if env.ValueFrom != nil &&
-				env.ValueFrom.ConfigMapKeyRef != nil &&
-				env.ValueFrom.ConfigMapKeyRef.Name == configMapName {
-				return true
-			}
-		}
-	}
-
-	return false
+		return pointerList, err
+	})
 }
 
 func (r *StatefulSetReloaderReconciler) findStatefulSetsForSecret(ctx context.Context, obj client.Object) []reconcile.Request {
-	var secret corev1.Secret
-	if err := r.Get(ctx, client.ObjectKeyFromObject(obj), &secret); err != nil {
-		return nil
-	}
+	return FindWorkloadsForSecret(ctx, r.Client, obj, func(ctx context.Context, namespace string) ([]*appsv1.StatefulSet, error) {
+		var list appsv1.StatefulSetList
+		err := r.List(ctx, &list, client.InNamespace(namespace))
 
-	var statefulSetList appsv1.StatefulSetList
-	if err := r.List(ctx, &statefulSetList, client.InNamespace(obj.GetNamespace())); err != nil {
-		return nil
-	}
+		pointerList := make([]*appsv1.StatefulSet, len(list.Items))
 
-	var result []reconcile.Request
-
-	for _, statefulSet := range statefulSetList.Items {
-		if statefulSetReferencesSecret(statefulSet, secret.GetName()) {
-			result = append(result, reconcile.Request{
-				NamespacedName: types.NamespacedName{
-					Name:      statefulSet.Name,
-					Namespace: statefulSet.Namespace,
-				},
-			})
+		for i, item := range list.Items {
+			pointerList[i] = &item
 		}
-	}
 
-	return result
-}
-
-func statefulSetReferencesSecret(statefulSet appsv1.StatefulSet, secretName string) bool {
-	// Check volumes
-	for _, vol := range statefulSet.Spec.Template.Spec.Volumes {
-		if vol.Secret != nil && vol.Secret.SecretName == secretName {
-			return true
-		}
-	}
-	// Check envFrom on each container
-	for _, container := range statefulSet.Spec.Template.Spec.Containers {
-		for _, envFrom := range container.EnvFrom {
-			if envFrom.SecretRef != nil && envFrom.SecretRef.Name == secretName {
-				return true
-			}
-		}
-		// Check individual env vars sourced from configmap
-		for _, env := range container.Env {
-			if env.ValueFrom != nil &&
-				env.ValueFrom.SecretKeyRef != nil &&
-				env.ValueFrom.SecretKeyRef.Name == secretName {
-				return true
-			}
-		}
-	}
-
-	return false
+		return pointerList, err
+	})
 }
